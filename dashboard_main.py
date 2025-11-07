@@ -6,12 +6,23 @@ from typing import Union, Optional
 
 import numpy as np
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QProgressBar, QTextEdit, QComboBox, QGroupBox,
-    QTabWidget
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QFileDialog,
+    QProgressBar,
+    QTextEdit,
+    QComboBox,
+    QGroupBox,
+    QTabWidget,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
+from models.model_loader import ModelLoader
 from models.model_manager import ModelManager
 # 🔴 여기! Base가 아니라 OrganCTPipeline을 가져온다
 from pipelines.common_pipeline import OrganCTPipeline
@@ -293,3 +304,51 @@ class DashboardPage(QWidget):
         self.lbl_status.setText("오류 발생")
         self.log_area.append(f"\n오류: {msg}")
         self.btn_select.setEnabled(True)
+
+
+class DashboardWindow(QMainWindow):
+    """메인 대시보드 창."""
+
+    def __init__(self, model_manager: ModelManager):
+        super().__init__()
+        self.setWindowTitle("L-POT Dashboard")
+        self.resize(1200, 800)
+
+        self.data_store = {
+            "image": None,
+            "verts": None,
+            "predictions": None,
+            "probabilities": None,
+            "labels": None,
+            "mesh_path": None,
+            "model_accuracy": None,
+            "prediction_accuracy": None,
+            "selected_folder": None,
+            "feature_file": None,
+            "organ": None,
+        }
+
+        self.page = DashboardPage(model_manager, self.data_store)
+        self.setCentralWidget(self.page)
+
+
+def create_model_manager() -> ModelManager:
+    """Load models and return a ready-to-use ``ModelManager`` instance."""
+
+    loader = ModelLoader()
+    loaded = loader.load()
+    return ModelManager(loaded)
+
+
+def main() -> None:
+    """Application entry point for running the dashboard standalone."""
+
+    app = QApplication.instance() or QApplication([])
+    model_manager = create_model_manager()
+    window = DashboardWindow(model_manager)
+    window.show()
+    app.exec()
+
+
+if __name__ == "__main__":
+    main()
