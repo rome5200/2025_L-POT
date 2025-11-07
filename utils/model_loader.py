@@ -138,8 +138,14 @@ class ModelManager:
 
         return probs.astype(np.float32, copy=False)
 
-    def predict_segmentation(self, features: np.ndarray, *, return_probabilities: bool = False):
-        """세그멘테이션 예측"""
+    def _predict(
+        self,
+        features: np.ndarray,
+        *,
+        return_probabilities: bool = False,
+    ):
+        """공통 세그멘테이션 예측 로직."""
+
         probs = self._infer_probabilities(features)
         predictions = probs > self.threshold
 
@@ -147,6 +153,33 @@ class ModelManager:
             return predictions, probs
 
         return predictions
+
+    def predict_segmentation(
+        self, features: np.ndarray, *, return_probabilities: bool = False
+    ):
+        """세그멘테이션 예측"""
+        return self._predict(features, return_probabilities=return_probabilities)
+
+    def predict_for_organ(
+        self,
+        organ: str,
+        features: np.ndarray,
+        *,
+        return_probabilities: bool = False,
+    ):
+        """장기 정보를 받아 세그멘테이션을 수행한다.
+
+        현재 모델은 폐(lung) 전용이므로 다른 장기는 지원하지 않는다. ``organ``
+        파라미터는 파이프라인과의 인터페이스를 맞추기 위해 존재한다.
+        """
+
+        organ_normalized = (organ or "lung").lower()
+        if organ_normalized not in {"lung", "pulmonary"}:
+            raise ValueError(
+                f"Unsupported organ '{organ}'. 현재 모델은 폐(lung)만 지원합니다."
+            )
+
+        return self._predict(features, return_probabilities=return_probabilities)
 
     def _generate_dummy_probabilities(self, features):
         """더미 확률 데이터 생성 (테스트용)"""

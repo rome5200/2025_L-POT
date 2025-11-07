@@ -1,4 +1,5 @@
 import numpy as np
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QTabWidget, QGroupBox,

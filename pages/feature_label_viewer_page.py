@@ -1,12 +1,20 @@
-import os
 from pathlib import Path
-from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
-                              QLabel, QLineEdit, QComboBox, QMessageBox)
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QMessageBox,
+)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 import numpy as np
 
 from utils.lung_3d_viewer import Lung3DViewer
+from utils.config import FEATURES_DIR, LABELS_DIR
 
 
 class FeatureLabelViewerPage(QWidget):
@@ -17,8 +25,8 @@ class FeatureLabelViewerPage(QWidget):
         self.model_manager = model_manager
         
         # 데이터 경로 설정
-        self.features_dir = Path(r"D:\hyehyeon\archive\archive\features_scaled")
-        self.labels_dir = Path(r"D:\hyehyeon\archive\archive\labels_scaled")
+        self.features_dir = FEATURES_DIR
+        self.labels_dir = LABELS_DIR
         
         self.init_ui()
         
@@ -125,15 +133,8 @@ class FeatureLabelViewerPage(QWidget):
             self.status_label.setText("데이터 로드 중...")
             
             # 파일 경로 구성
-            feature_path = self.features_dir / f"{patient_id}_1.00_features.npy"
-            label_path = self.labels_dir / f"{patient_id}_1.00_vertex_labels.npy"
-            
-            # 파일 존재 확인
-            if not feature_path.exists():
-                raise FileNotFoundError(f"피처 파일을 찾을 수 없습니다: {feature_path}")
-                
-            if not label_path.exists():
-                raise FileNotFoundError(f"라벨 파일을 찾을 수 없습니다: {label_path}")
+            feature_path = self._resolve_feature_file(patient_id)
+            label_path = self._resolve_label_file(patient_id)
             
             # 데이터 로드
             features = np.load(feature_path)
@@ -152,7 +153,9 @@ class FeatureLabelViewerPage(QWidget):
             self.status_label.setText("예측 계산 중...")
             
             # 예측 계산
-            pred_mask = self.model_manager.predict_segmentation(features)
+            pred_mask = self.model_manager.predict_for_organ(
+                "lung", features
+            )
             
             # 다운샘플링 스텝 가져오기
             downsample_text = self.downsample_combo.currentText()
@@ -190,6 +193,41 @@ class FeatureLabelViewerPage(QWidget):
             QMessageBox.critical(self, "오류", f"예상치 못한 오류가 발생했습니다:\n{str(e)}")
             self.status_label.setText("오류가 발생했습니다.")
     
+    # ------------------------------------------------------------------
+    # 내부 유틸
+    # ------------------------------------------------------------------
+    def _resolve_feature_file(self, patient_id: str) -> Path:
+        """Patient ID에 대응하는 feature 파일을 찾는다."""
+
+        candidates = [
+            self.features_dir / f"{patient_id}_features.npy",
+            *sorted(self.features_dir.glob(f"{patient_id}_*_features.npy")),
+        ]
+
+        for path in candidates:
+            if path.exists():
+                return path
+
+        raise FileNotFoundError(
+            f"피처 파일을 찾을 수 없습니다: {self.features_dir / (patient_id + '*')}"
+        )
+
+    def _resolve_label_file(self, patient_id: str) -> Path:
+        """Patient ID에 대응하는 라벨 파일을 찾는다."""
+
+        candidates = [
+            self.labels_dir / f"{patient_id}_vertex_labels.npy",
+            *sorted(self.labels_dir.glob(f"{patient_id}_*_vertex_labels.npy")),
+        ]
+
+        for path in candidates:
+            if path.exists():
+                return path
+
+        raise FileNotFoundError(
+            f"라벨 파일을 찾을 수 없습니다: {self.labels_dir / (patient_id + '*')}"
+        )
+
     def update_page(self):
         """페이지 업데이트 (필요시 호출)"""
         # 현재는 특별한 업데이트 로직이 없음
