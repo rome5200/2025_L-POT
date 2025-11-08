@@ -1,26 +1,31 @@
-# utils/viewer_2d.py
-
+# pages/ui_viewers.py
 from __future__ import annotations
 
 import numpy as np
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QSlider,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap, QImage
 
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
 
 class CT2DViewer(QWidget):
     """
-    3D CT 볼륨 (z, h, w) 을 받아서 슬라이더로 슬라이스를 바꿔가며 보여주는 위젯.
+    3D CT 볼륨 (z, h, w)을 받아서 슬라이더로 슬라이스를 바꿔가며 보여주는 위젯.
     - set_image(volume) 으로 데이터 주입
-    - HU 범위는 기본 (-1000, 400) 로 윈도잉해서 8bit로 보여줌
+    - HU 범위는 기본 (-1000, 400) 으로 윈도잉해서 8bit로 보여줌
     """
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._image_data: np.ndarray | None = None
-
         self._build_ui()
 
     # -----------------------------------------------------------
@@ -152,3 +157,87 @@ class CT2DViewer(QWidget):
             Qt.TransformationMode.SmoothTransformation,
         )
         self.image_label.setPixmap(scaled)
+
+
+class Lung3DViewer(QWidget):
+    """
+    간단한 3D 폐/결절 시각화용 위젯.
+    verts (N, 3)를 그리고, 예측/정답 마스크가 있으면 색을 다르게 표시한다.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+
+        self.fig = Figure(figsize=(5, 5))
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111, projection="3d")
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.canvas)
+        self.setLayout(layout)
+
+    def update_plot(
+        self,
+        verts: np.ndarray | None,
+        predictions: np.ndarray | None = None,
+        ground_truth_mask: np.ndarray | None = None,
+        title: str = "3D Viewer",
+    ):
+        """
+        verts: (N, 3)
+        predictions: bool or 0/1 mask
+        ground_truth_mask: bool or 0/1 mask
+        """
+        self.ax.clear()
+        self.ax.set_title(title)
+
+        if verts is None or len(verts) == 0:
+            self.ax.text(0.5, 0.5, 0.5, "데이터 없음", color="gray")
+            self.canvas.draw()
+            return
+
+        # 전체 구조 (희미하게)
+        self.ax.scatter(
+            verts[:, 0],
+            verts[:, 1],
+            verts[:, 2],
+            c="gray",
+            s=1,
+            alpha=0.2,
+            label="Structure",
+        )
+
+        # 예측 결과
+        if predictions is not None and np.any(predictions):
+            pred_mask = predictions.astype(bool)
+            pos = verts[pred_mask]
+            self.ax.scatter(
+                pos[:, 0],
+                pos[:, 1],
+                pos[:, 2],
+                c="red",
+                s=6,
+                alpha=0.6,
+                label="Prediction",
+            )
+
+        # 실제 GT
+        if ground_truth_mask is not None and np.any(ground_truth_mask):
+            gt_mask = ground_truth_mask.astype(bool)
+            gt = verts[gt_mask]
+            self.ax.scatter(
+                gt[:, 0],
+                gt[:, 1],
+                gt[:, 2],
+                c="cyan",
+                s=6,
+                alpha=0.6,
+                label="Ground Truth",
+            )
+
+        self.ax.legend(loc="upper right")
+        self.ax.set_xlabel("X")
+        self.ax.set_ylabel("Y")
+        self.ax.set_zlabel("Z")
+        self.ax.view_init(elev=30, azim=45)
+        self.canvas.draw()

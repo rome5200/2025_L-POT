@@ -13,10 +13,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from models.model_manager import ModelManager
-from pipelines.common_pipeline import BaseCTPipeline
+from pipelines.common_pipeline import BaseCTPipeline, OrganCTPipeline
 
-from utils.viewer_3d import Lung3DViewer   # 공용 3D 뷰어
-from utils.viewer_2d import CT2DViewer     # 공용 2D 뷰어
+from pages.ui_viewer import CT2DViewer, Lung3DViewer
 
 
 # ───────────────────────────────────────────────────────────────
@@ -37,9 +36,12 @@ class ProcessingThread(QThread):
         self.folder_path = Path(folder_path)
         self.model_manager = model_manager
         self.organ = organ  # "lung" or "liver"
-        self.pipeline = BaseCTPipeline(organ)
 
-    def _progress_cb(self, pct: int, msg: str) -> None:
+        # 🔴 문제였던 줄: self.pipeline = BaseCTPipeline(organ)
+        # ✅ 이렇게 써야 한다
+        self.pipeline = OrganCTPipeline(organ)
+
+    def _progress_cb(self, pct: int, msg: str):
         self.progress.emit(pct, msg)
 
     def run(self):
@@ -49,7 +51,7 @@ class ProcessingThread(QThread):
                 self.model_manager,
                 progress_cb=self._progress_cb,
             )
-            # 혹시 파이프라인이 organ을 안 넣어줬다면 여기서라도 넣어줌
+            # 혹시 파이프라인이 organ을 안 넣었으면 여기서라도 넣어줌
             result.setdefault("organ", self.organ)
             self.finished.emit(result)
         except Exception as e:

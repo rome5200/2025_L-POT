@@ -1,5 +1,5 @@
-from .upload_page import UploadPage
-from .viewer_page import ViewerPage
-from .feature_label_viewer_page import FeatureLabelViewerPage
+# pages/__init__.py
 
-__all__ = ['UploadPage', 'ViewerPage', 'FeatureLabelViewerPage']
+from .dashboard_page import DashboardPage
+
+__all__ = ["DashboardPage"]

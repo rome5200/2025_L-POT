@@ -1,66 +1,74 @@
 # pipelines/common_pipeline.py
-
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, Tuple
+from typing import Any, Dict, Optional, Callable, Tuple
+import tempfile
 
 import numpy as np
 
-from utils.config import FEATURES_DIR, LABELS_DIR
-from utils.dicom_processor import DICOMProcessor
-from utils.mesh_processor import MeshProcessor
+from utils import DICOMProcessor, MeshProcessor  # lazy import 구조에 맞춤 :contentReference[oaicite:4]{index=4}
+from utils.config import FEATURES_DIR, FEATURES_DIRS, LABELS_DIR, LABELS_DIRS
 
-# 진행상황 콜백 타입
 ProgressCB = Optional[Callable[[int, str], None]]
 
 
 class BaseCTPipeline:
     """
-    CT/DICOM을 읽고 공통 경로를 만들어주는 베이스 클래스.
-    여기까지는 '장기' 개념이 없음.
+    DICOM → (이미지, 슬라이스) → feature/label 파일 경로 찾는 공통 파이프라인.
+    장기 구분은 여기엔 없음.
     """
-    features_dir: Path = FEATURES_DIR
-    labels_dir: Path = LABELS_DIR
 
+    def __init__(self) -> None:
+        self.features_dir: Path = FEATURES_DIR
+        self.labels_dir: Path = LABELS_DIR
+
+    # 공통 progress 헬퍼
     def _progress(self, cb: ProgressCB, pct: int, msg: str) -> None:
         if cb is not None:
-            cb(pct, msg)
+            cb(int(pct), msg)
 
     def _extract_id_from_folder(self, folder: Path) -> str:
-        name = folder.name
-        if "-" in name:
-            return name.split("-")[-1]
-        return name
-
-    def _get_feature_path(self, pid: str) -> Optional[Path]:
-        cand = self.features_dir / f"{pid}_features.npy"
-        return cand if cand.exists() else None
-
-    def _get_label_path(self, pid: str) -> Optional[Path]:
-        cand = self.labels_dir / f"{pid}_vertex_labels.npy"
-        return cand if cand.exists() else None
-
-    def prepare_paths(self, folder: Path) -> Tuple[str, Optional[Path], Optional[Path]]:
         """
-        폴더명에서 환자 ID를 뽑고, 해당 ID로 feature/label 경로를 찾아준다.
+        폴더 이름에서 케이스 ID를 만든다.
+        이제는 이 ID가 곧 파일 이름이 될 거라서 접미사 안 붙인다.
+        예) '2025-CT-001' -> '2025-CT-001'
         """
+        return folder.name
+
+    def _feature_path_for(self, pid: str) -> Path:
+        return self.features_dir / f"{pid}_features.npy"
+
+    def _label_path_for(self, pid: str) -> Path:
+        return self.labels_dir / f"{pid}_vertex_labels.npy"
+
+    def prepare_paths(self, folder: Path) -> Tuple[str, Path, Path]:
         pid = self._extract_id_from_folder(folder)
-        feature_path = self._get_feature_path(pid)
-        label_path = self._get_label_path(pid)
-        return pid, feature_path, label_path
+        return pid, self._feature_path_for(pid), self._label_path_for(pid)
 
     def load_ct(self, folder: Path, progress_cb: ProgressCB = None) -> Dict[str, Any]:
-        """
-        DICOM 폴더를 읽어서 image, mask, spacing, slices 를 돌려준다.
-        """
-        self._progress(progress_cb, 10, "DICOM/CT 데이터 불러오는 중...")
+        self._progress(progress_cb, 10, "DICOM 불러오는 중...")
         dcm = DICOMProcessor()
-        result = dcm.load_and_process(str(folder))
-        self._progress(progress_cb, 20, "DICOM/CT 로드 완료")
-        return result
+        ct = dcm.load_and_process(str(folder))  # image, mask, spacing, slices 전부 줌 :contentReference[oaicite:6]{index=6}
+        self._progress(progress_cb, 25, "DICOM 로드 완료")
+        return ct
 
-    def make_result_dict(
+    def _load_labels_if_valid(
+        self,
+        label_path: Path,
+        n_verts: int,
+        progress_cb: ProgressCB = None,
+    ) -> Optional[np.ndarray]:
+        if not label_path.exists():
+            return None
+        labels = np.load(str(label_path)).astype(bool)
+        if labels.size == n_verts:
+            self._progress(progress_cb, 70, f"정답 라벨 로드: {label_path.name}")
+            return labels
+        self._progress(progress_cb, 70, "라벨 길이가 안 맞아 무시합니다.")
+        return None
+
+    def make_result(
         self,
         *,
         image: np.ndarray,
@@ -92,13 +100,14 @@ class BaseCTPipeline:
 
 class OrganCTPipeline(BaseCTPipeline):
     """
-    장기 이름만 다르고 나머지 흐름이 같은 파이프라인.
-    Dashboard나 Thread에서는 그냥 OrganCTPipeline("lung") / ("liver") 이런 식으로 쓰면 됨.
+    장기 이름만 바꿔서 CT 파이프라인을 돌리는 래퍼.
     """
 
     def __init__(self, organ: str):
         super().__init__()
-        self.organ = organ  # "lung" or "liver" ...
+        self.organ = organ
+        self.features_dir = FEATURES_DIRS[organ]
+        self.labels_dir = LABELS_DIRS[organ]
 
     def run(
         self,
@@ -108,42 +117,36 @@ class OrganCTPipeline(BaseCTPipeline):
     ) -> Dict[str, Any]:
         folder = Path(folder_path)
 
-        # 1) 경로 준비
+        # 1) ID 및 파일 경로 준비
         pid, feature_path, label_path = self.prepare_paths(folder)
 
         # 2) CT 로드
-        ct_result = self.load_ct(folder, progress_cb)
-        image = ct_result["image"]
-        slices = ct_result.get("slices")
+        ct = self.load_ct(folder, progress_cb)
+        image = ct["image"]
+        slices = ct["slices"]
 
-        # 3) 사전 feature가 있는 경우
-        if feature_path is not None and feature_path.exists():
-            self._progress(progress_cb, 30, f"사전 계산 feature 발견: {feature_path.name}")
+        # 3) 사전 계산 feature가 있으면 그걸로 바로 예측
+        if feature_path.exists():
+            self._progress(progress_cb, 40, f"사전 feature 사용: {feature_path.name}")
             features = np.load(str(feature_path)).astype(np.float32, copy=False)
-
-            if features.ndim != 2 or features.shape[1] < 3:
-                raise ValueError(f"feature 데이터 형태가 잘못되었습니다: {features.shape!r}")
-
             verts = features[:, :3].astype(np.float32, copy=False)
 
-            # organ에 맞는 모델로 예측
-            self._progress(progress_cb, 50, "모델 예측 중...")
+            self._progress(progress_cb, 60, "모델 예측 중...")
             preds, probs = model_manager.predict_for_organ(
                 self.organ,
                 features,
                 return_probabilities=True,
             )
 
-            # 라벨이 있으면 길이가 맞을 때만
-            labels = self._load_labels_if_match(label_path, verts.shape[0], progress_cb)
+            labels = self._load_labels_if_valid(label_path, verts.shape[0], progress_cb)
 
-            prediction_accuracy = None
+            pred_acc = None
             if labels is not None:
-                prediction_accuracy = float((preds.astype(int) == labels.astype(int)).mean())
+                pred_acc = float((preds.astype(int) == labels.astype(int)).mean())
 
-            self._progress(progress_cb, 100, "처리 완료")
+            self._progress(progress_cb, 100, "완료")
 
-            return self.make_result_dict(
+            return self.make_result(
                 image=image,
                 verts=verts,
                 predictions=preds,
@@ -151,18 +154,19 @@ class OrganCTPipeline(BaseCTPipeline):
                 labels=labels,
                 mesh_path=None,
                 model_accuracy=getattr(model_manager, "model_accuracy", None),
-                prediction_accuracy=prediction_accuracy,
+                prediction_accuracy=pred_acc,
                 selected_folder=folder.name,
                 feature_file=str(feature_path),
                 organ=self.organ,
             )
 
-        # 4) 사전 feature가 없으면 → 메쉬 생성 후 추출
-        self._progress(progress_cb, 40, "사전 feature가 없어 메쉬를 생성합니다...")
-        mesh_proc = MeshProcessor()
-        mesh, mesh_path = mesh_proc.create_mesh(image, slices, tmpdir=None)
+        # 4) feature가 없으면 → 메쉬 생성 → feature 추출 → 예측
+        self._progress(progress_cb, 40, "메쉬 생성 중...")
+        mesh_proc = MeshProcessor()  # 너네 utils 기준으로 맞춤 :contentReference[oaicite:7]{index=7}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mesh, mesh_path = mesh_proc.create_mesh(image, slices, tmpdir=tmpdir)
 
-        self._progress(progress_cb, 60, "정점 특징 추출 중...")
+        self._progress(progress_cb, 55, "정점 특징 추출 중...")
         verts, feat, transform, dists = mesh_proc.extract_features(mesh)
 
         self._progress(progress_cb, 70, "모델 예측 중...")
@@ -172,15 +176,15 @@ class OrganCTPipeline(BaseCTPipeline):
             return_probabilities=True,
         )
 
-        labels = self._load_labels_if_match(label_path, verts.shape[0], progress_cb)
+        labels = self._load_labels_if_valid(label_path, verts.shape[0], progress_cb)
 
-        prediction_accuracy = None
+        pred_acc = None
         if labels is not None and labels.size == preds.size:
-            prediction_accuracy = float((preds.astype(int) == labels.astype(int)).mean())
+            pred_acc = float((preds.astype(int) == labels.astype(int)).mean())
 
-        self._progress(progress_cb, 100, "처리 완료")
+        self._progress(progress_cb, 100, "완료")
 
-        return self.make_result_dict(
+        return self.make_result(
             image=image,
             verts=verts,
             predictions=preds,
@@ -188,32 +192,8 @@ class OrganCTPipeline(BaseCTPipeline):
             labels=labels,
             mesh_path=mesh_path,
             model_accuracy=getattr(model_manager, "model_accuracy", None),
-            prediction_accuracy=prediction_accuracy,
+            prediction_accuracy=pred_acc,
             selected_folder=folder.name,
             feature_file=None,
             organ=self.organ,
         )
-
-    # ------------------------------------------------------------------
-    # 내부: 라벨 로드
-    # ------------------------------------------------------------------
-    def _load_labels_if_match(
-        self,
-        label_path: Optional[Path],
-        n_verts: int,
-        progress_cb: ProgressCB = None,
-    ) -> Optional[np.ndarray]:
-        if label_path is None or not label_path.exists():
-            return None
-
-        lab = np.load(str(label_path)).astype(bool)
-        if lab.size == n_verts:
-            self._progress(progress_cb, 65, f"라벨 로드 완료: {label_path.name}")
-            return lab
-        else:
-            self._progress(
-                progress_cb,
-                65,
-                f"라벨 길이가 맞지 않아 무시: {lab.size} vs {n_verts}",
-            )
-            return None

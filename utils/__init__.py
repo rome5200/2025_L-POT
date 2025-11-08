@@ -1,27 +1,26 @@
-"""Utility package exports with lazy loading to avoid circular imports."""
 from __future__ import annotations
 
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Dict
 
 __all__ = [
-    "ModelManager",
     "DICOMProcessor",
     "MeshProcessor",
     "preprocess_mesh_single",
+    "resource_path",
 ]
 
 _MODULE_MAP: Dict[str, str] = {
-    "ModelManager": ".model_loader",
     "DICOMProcessor": ".dicom_processor",
     "MeshProcessor": ".mesh_processor",
     "preprocess_mesh_single": ".mesh_processor",
+    "resource_path": ".helper",
 }
 
-if TYPE_CHECKING:  # pragma: no cover - imported for static analysis only
+if TYPE_CHECKING:  # pragma: no cover
     from .dicom_processor import DICOMProcessor
     from .mesh_processor import MeshProcessor, preprocess_mesh_single
-    from .model_loader import ModelManager
+    from .helper import resource_path
 
 
 def __getattr__(name: str) -> Any:
